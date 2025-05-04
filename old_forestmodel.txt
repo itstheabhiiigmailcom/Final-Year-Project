@@ -1,0 +1,169 @@
+import React, { Suspense, useState, useEffect, useRef } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { MapControls, useGLTF } from '@react-three/drei';
+import ObjectPopup from './ObjectPopup';
+import * as THREE from 'three';
+import { useAuth } from '../context/AuthContext'; // ⬅️ Import your context
+
+// Load the .glb model
+const Model = ({ url }) => {
+  const { scene } = useGLTF(url);
+
+  useEffect(() => {
+    scene.traverse((child) => {
+      if (child.isMesh) {
+        child.userData.clickable = true;
+      }
+    });
+  }, [scene]);
+
+  return <primitive object={scene} scale={1.5} position={[0, 0, 0]} />;
+};
+
+// Camera controller with movement and zoom limits
+const CameraController = () => {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef();
+
+  const bounds = {
+    minX: -300,
+    maxX: 300,
+    minZ: -300,
+    maxZ: 300,
+    minY: 4, // keep camera a bit higher
+    maxY: 50, // allow higher vertical movement
+  };
+
+  useEffect(() => {
+    camera.position.set(0, 20, 20);
+    camera.lookAt(0, 0, 0);
+  }, [camera]);
+
+  useFrame(() => {
+    const pos = camera.position;
+    pos.x = THREE.MathUtils.clamp(pos.x, bounds.minX, bounds.maxX);
+    pos.y = THREE.MathUtils.clamp(pos.y, bounds.minY, bounds.maxY);
+    pos.z = THREE.MathUtils.clamp(pos.z, bounds.minZ, bounds.maxZ);
+    camera.position.set(pos.x, pos.y, pos.z);
+  });
+
+  return (
+    <MapControls
+      ref={controlsRef}
+      args={[camera, gl.domElement]}
+      enableRotate={false}
+      enableZoom={true}
+      enablePan={true}
+      minDistance={1}
+      maxDistance={150}
+      zoomSpeed={1}
+      panSpeed={2}
+    />
+  );
+};
+
+// Click handler for detecting object clicks
+
+const ClickHandler = ({ setSelectedInfo }) => {
+  const { camera, scene, gl } = useThree();
+  const raycaster = useRef(new THREE.Raycaster());
+  const mouse = useRef(new THREE.Vector2());
+  const { handleCubeClick } = useAuth(); // ⬅️ Access your function
+
+  const handleClick = async (event) => {
+    const bounds = gl.domElement.getBoundingClientRect();
+    mouse.current.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.current.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+
+    raycaster.current.setFromCamera(mouse.current, camera);
+    const intersects = raycaster.current.intersectObjects(scene.children, true);
+
+    if (intersects.length > 0) {
+      const hit = intersects[0].object;
+      if (hit.userData.clickable) {
+        const cubeName = hit.name || 'UnnamedObject';
+        const worldPosition = hit.getWorldPosition(new THREE.Vector3());
+
+        window.dispatchEvent(
+          new CustomEvent('cube-clicked', { detail: { cubeName } })
+        );
+
+        if (cubeName === 'Object_2') {
+          return;
+        }
+
+        const { success, plant, message } = await handleCubeClick(cubeName);
+
+        if (success) {
+          setSelectedInfo({
+            Cube: plant.cubeName,
+            position: worldPosition,
+            family: plant.family,
+            scientificName: plant.scientificName,
+            collector: plant.collector,
+            country: plant.country,
+            uses: plant.uses,
+            imageUrl: plant.image,
+          });
+        } else {
+          setSelectedInfo({
+            Cube: cubeName,
+            position: worldPosition,
+            description: message || 'No info found in database.',
+            family: '',
+            scientificName: '',
+            collector: '',
+            country: '',
+            uses: '',
+            imageUrl: '',
+          });
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    gl.domElement.addEventListener('click', handleClick);
+    return () => gl.domElement.removeEventListener('click', handleClick);
+  }, [gl, handleCubeClick]); // ⬅️ added dependency
+
+  return null;
+};
+
+// Main component
+const ForestModelViewer = ({ modelPath }) => {
+  const [selectedInfo, setSelectedInfo] = useState(null);
+
+  return (
+    <div id="Forest" className="w-full h-screen ">
+      <Canvas camera={{ position: [0, 5, 1], fov: 65 }}>
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[0, 20, 10]} />
+
+        <Suspense fallback={null}>
+          <Model url={modelPath} />
+        </Suspense>
+
+        <CameraController />
+        <ClickHandler setSelectedInfo={setSelectedInfo} />
+
+        {/* Popup positioned in 3D space near clicked object */}
+        {selectedInfo && (
+          <ObjectPopup
+            name={selectedInfo.name}
+            position={selectedInfo.position}
+            family={selectedInfo.family}
+            scientificName={selectedInfo.scientificName}
+            collector={selectedInfo.collector}
+            country={selectedInfo.country}
+            uses={selectedInfo.uses}
+            imageUrl={selectedInfo.imageUrl}
+            onClose={() => setSelectedInfo(null)}
+          />
+        )}
+      </Canvas>
+    </div>
+  );
+};
+
+export default ForestModelViewer;
